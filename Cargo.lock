@@ -752,7 +752,7 @@ name = "hayro-bench"
 version = "0.1.0"
 dependencies = [
  "hayro",
- "hayro-syntax",
+ "hayro-syntax 0.7.2",
  "pdfium-render",
  "walkdir",
 ]
@@ -760,6 +760,12 @@ dependencies = [
 [[package]]
 name = "hayro-ccitt"
 version = "0.3.0"
+
+[[package]]
+name = "hayro-ccitt"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f4d0e94ddd48749f06bbe4e5389fb9799a0c45bcaf00495042076ef05e3241a"
 
 [[package]]
 name = "hayro-cmap"
@@ -787,9 +793,9 @@ dependencies = [
 name = "hayro-fuzz"
 version = "0.0.0"
 dependencies = [
- "hayro-ccitt",
- "hayro-jbig2",
- "hayro-jpeg2000",
+ "hayro-ccitt 0.3.0",
+ "hayro-jbig2 0.3.0",
+ "hayro-jpeg2000 0.3.5",
  "image 0.25.10",
  "libfuzzer-sys",
 ]
@@ -800,7 +806,7 @@ version = "0.7.0"
 dependencies = [
  "bitflags 2.11.0",
  "hayro-cmap",
- "hayro-syntax",
+ "hayro-syntax 0.7.2",
  "image 0.25.10",
  "kurbo",
  "log",
@@ -819,12 +825,22 @@ version = "0.3.0"
 dependencies = [
  "criterion",
  "fearless_simd",
- "hayro-ccitt",
+ "hayro-ccitt 0.3.0",
  "image 0.25.10",
  "indicatif",
  "rayon",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "hayro-jbig2"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69374b3668dd45aeb3d3145cda68f2c7b4f223aaa2511e67d076f1c7d741388d"
+dependencies = [
+ "fearless_simd",
+ "hayro-ccitt 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -839,6 +855,16 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "hayro-jpeg2000"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c75ab947623ef4ccaa7acf0579edf7cbb5a73838e3839a7be73335e522f433a1"
+dependencies = [
+ "fearless_simd",
+ "log",
 ]
 
 [[package]]
@@ -865,9 +891,9 @@ dependencies = [
  "aes",
  "cbc",
  "flate2",
- "hayro-ccitt",
- "hayro-jbig2",
- "hayro-jpeg2000",
+ "hayro-ccitt 0.3.0",
+ "hayro-jbig2 0.3.0",
+ "hayro-jpeg2000 0.3.5",
  "log",
  "md5",
  "memchr",
@@ -878,15 +904,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "hayro-syntax"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0edeafd70aa2db743de8ede8637d07ec87db05efe69cde371d03f1b185fcef27"
+dependencies = [
+ "flate2",
+ "hayro-ccitt 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hayro-jbig2 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hayro-jpeg2000 0.3.5 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log",
+ "memchr",
+ "rustc-hash",
+ "smallvec",
+ "zune-jpeg",
+]
+
+[[package]]
 name = "hayro-tests"
 version = "0.1.0"
 dependencies = [
  "hayro",
  "hayro-cmap",
- "hayro-jbig2",
- "hayro-jpeg2000",
+ "hayro-jbig2 0.3.0",
+ "hayro-jpeg2000 0.3.5",
  "hayro-svg",
- "hayro-syntax",
+ "hayro-syntax 0.7.2",
  "hayro-write",
  "image 0.25.10",
  "memchr",
@@ -902,7 +945,7 @@ name = "hayro-write"
 version = "0.7.0"
 dependencies = [
  "flate2",
- "hayro-syntax",
+ "hayro-syntax 0.7.2",
  "log",
  "pdf-writer",
 ]
