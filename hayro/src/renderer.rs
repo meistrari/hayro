@@ -503,13 +503,105 @@ impl Renderer {
                         xs = xs.max(min_x_scale).min(max_x_scale);
                         ys = ys.max(min_y_scale).min(max_y_scale);
 
-                        let x_step = xs * t.x_step;
-                        let y_step = ys * t.y_step;
+                        // The pixmap covers one full tile period, but files in
+                        // the wild use huge steps (e.g. /XStep 99999) to mean
+                        // "paint the cell once, never repeat", so sizing the
+                        // pixmap from the step alone saturates the `as u16`
+                        // cast at 65535x65535 — a 16 GiB allocation of mostly
+                        // dead padding between cells. A period only matters up
+                        // to where a second cell could still intersect the
+                        // painted area, so it is clamped there: whenever the
+                        // clamp engages, no cell other than the base one was
+                        // visible anyway and the rendered output is unchanged.
+                        //
+                        // Everything below is linear in `xs`/`ys`; it lives in
+                        // a closure so the area budget further down can re-run
+                        // it with a reduced scale.
+                        let derive_pixmap_size = |xs: f32, ys: f32| {
+                            let x_step = xs * t.x_step;
+                            let y_step = ys * t.y_step;
 
-                        let scaled_width = bbox.width() as f32 * xs;
-                        let scaled_height = bbox.height() as f32 * ys;
-                        let pix_width = x_step.abs().round() as u16;
-                        let pix_height = y_step.abs().round() as u16;
+                            let scaled_width = bbox.width() as f32 * xs;
+                            let scaled_height = bbox.height() as f32 * ys;
+
+                            let mut visible = (*path_transform * path.clone()).bounding_box();
+
+                            if is_stroke {
+                                // Try to account for stroke in bbox.
+                                let (a1, a2) = x_y_advances(path_transform);
+                                let factor = a1.length().max(a2.length()) * self.ctx.stroke().width;
+                                visible = visible.inflate(factor, factor);
+                            }
+
+                            visible = visible.intersect(Rect::new(
+                                0.0,
+                                0.0,
+                                self.ctx.width() as f64,
+                                self.ctx.height() as f64,
+                            ));
+
+                            // Map the visible device rect into the tile
+                            // pixmap's coordinate space. `t.matrix` maps
+                            // pattern space directly to device space (the root
+                            // transform was pre-concatenated when the paint
+                            // was resolved), and vello re-applies the path
+                            // transform on top of `paint_transform`, so the
+                            // path transform cancels out and must not appear
+                            // here.
+                            let to_pixmap = Affine::scale_non_uniform(xs as f64, ys as f64)
+                                * Affine::translate((-bbox.x0, -bbox.y0))
+                                * t.matrix.inverse();
+                            let visible = to_pixmap.transform_rect_bbox(visible);
+
+                            // A cell drawn at the next repetition (starting at
+                            // `x1`) or at the previous one (ending before
+                            // `x0`, i.e. a period of at least `scaled_width -
+                            // x0`) must stay out of view.
+                            let max_x_period = ((visible.x1.max(scaled_width as f64 - visible.x0)
+                                + 1.0) as f32)
+                                .max(1.0);
+                            let max_y_period = ((visible.y1.max(scaled_height as f64 - visible.y0)
+                                + 1.0) as f32)
+                                .max(1.0);
+
+                            (
+                                x_step,
+                                y_step,
+                                scaled_width,
+                                scaled_height,
+                                x_step.abs().min(max_x_period),
+                                y_step.abs().min(max_y_period),
+                            )
+                        };
+
+                        let (
+                            mut x_step,
+                            mut y_step,
+                            mut scaled_width,
+                            mut scaled_height,
+                            mut pix_w,
+                            mut pix_h,
+                        ) = derive_pixmap_size(xs, ys);
+
+                        // The per-dimension clamps still admit extreme aspect
+                        // ratios, and 65535x65535 remains representable, so
+                        // additionally budget the total area at
+                        // MAX_PIXMAP_SIZE^2 pixels (~36 MB of RGBA). Scaling
+                        // `xs`/`ys` down shrinks cell and period alike, so the
+                        // pattern geometry is preserved and only the sampling
+                        // density drops.
+                        const MAX_PIXMAP_AREA: f32 = MAX_PIXMAP_SIZE * MAX_PIXMAP_SIZE;
+                        let area = pix_w * pix_h;
+                        if area > MAX_PIXMAP_AREA {
+                            let scale_down = (MAX_PIXMAP_AREA / area).sqrt();
+                            xs *= scale_down;
+                            ys *= scale_down;
+                            (x_step, y_step, scaled_width, scaled_height, pix_w, pix_h) =
+                                derive_pixmap_size(xs, ys);
+                        }
+
+                        let pix_width = pix_w.round() as u16;
+                        let pix_height = pix_h.round() as u16;
 
                         let mut renderer = Self {
                             ctx: RenderContext::new_with(
