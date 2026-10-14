@@ -3,7 +3,9 @@ use crate::context::Context;
 use crate::device::Device;
 use crate::font::glyph_simulator::GlyphSimulator;
 use crate::font::true_type::{Width, read_encoding, read_widths};
-use crate::font::{Encoding, Glyph, Type3Glyph, UNITS_PER_EM, read_to_unicode};
+use crate::font::{
+    Encoding, Glyph, Type3Glyph, UNITS_PER_EM, agl_glyph_name_to_unicode, read_to_unicode,
+};
 use crate::interpret::state::TextState;
 use crate::soft_mask::SoftMask;
 use crate::util::RectExt;
@@ -79,12 +81,24 @@ impl<'a> Type3<'a> {
     }
 
     pub(crate) fn map_code(&self, code: u8) -> GlyphId {
+        self.glyph_name(code)
+            .map(|g| self.glyph_simulator.string_to_glyph(g))
+            .unwrap_or(GlyphId::NOTDEF)
+    }
+
+    fn glyph_name(&self, code: u8) -> Option<&str> {
         self.encodings
             .get(&code)
             .map(|s| s.as_str())
             .or_else(|| self.encoding.map_code(code))
-            .map(|g| self.glyph_simulator.string_to_glyph(g))
-            .unwrap_or(GlyphId::NOTDEF)
+    }
+
+    pub(crate) fn matrix(&self) -> Affine {
+        self.matrix
+    }
+
+    pub(crate) fn bbox(&self) -> Rect {
+        self.font_bbox
     }
 
     pub(crate) fn glyph_width(&self, code: u8) -> f32 {
@@ -96,10 +110,24 @@ impl<'a> Type3<'a> {
     }
 
     pub(crate) fn char_code_to_unicode(&self, char_code: u32) -> Option<BfString> {
-        // Type3 fonts can only provide Unicode via ToUnicode CMap.
-        self.to_unicode
+        if let Some(unicode) = self
+            .to_unicode
             .as_ref()
             .and_then(|t| t.lookup_bf_string(char_code))
+        {
+            return Some(unicode);
+        }
+
+        // Without a ToUnicode CMap, fall back to the glyph name the encoding
+        // assigns to the code, as for simple outline fonts.
+        let code = u8::try_from(char_code).ok()?;
+        let name = self.glyph_name(code)?;
+        let unicode =
+            agl_glyph_name_to_unicode(name).or_else(|| numeric_glyph_name_to_unicode(name, code));
+        if unicode.is_none() {
+            warn!("failed to map Type3 glyph name {} to unicode", name);
+        }
+        unicode
     }
 
     pub(crate) fn render_glyph(
@@ -175,6 +203,25 @@ impl<'a> Type3<'a> {
     }
 }
 
+/// Producers that write Type3 fonts without a `ToUnicode` `CMap` often name each
+/// glyph after its own character code — `/C41`, `/G41`, `/g0041` — instead of
+/// using Adobe Glyph List names (poppler and pdf.js both recognize these).
+/// The name carries no Unicode by itself, so it is only trusted when the number
+/// it spells, read as hex or decimal, IS the code it is mapped from; the code
+/// is then read as Latin-1, as pdf.js does. A name that spells another number
+/// says nothing reliable and yields `None`, as do C0/C1 control codes.
+fn numeric_glyph_name_to_unicode(name: &str, code: u8) -> Option<BfString> {
+    let digits = name.strip_prefix(['C', 'c', 'G', 'g'])?;
+    if digits.is_empty() || digits.len() > 4 || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+
+    let spells_code = u32::from_str_radix(digits, 16).ok() == Some(code as u32)
+        || digits.parse::<u32>().ok() == Some(code as u32);
+    let character = char::from(code);
+    (spells_code && !character.is_control()).then_some(BfString::Char(character))
+}
+
 impl CacheKey for Type3<'_> {
     fn cache_key(&self) -> u128 {
         self.dict.cache_key()
@@ -244,4 +291,54 @@ impl<'a, T: Device<'a>> Device<'a> for Type3ShapeGlyphDevice<'a, '_, T> {
     }
 
     fn set_blend_mode(&mut self, _: BlendMode) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::numeric_glyph_name_to_unicode;
+    use hayro_cmap::BfString;
+
+    #[test]
+    fn numeric_glyph_name_maps_when_it_spells_its_own_code() {
+        // Hex, as some producers write them (`32 /C20 ... 65 /C41`).
+        assert_eq!(
+            numeric_glyph_name_to_unicode("C41", 0x41),
+            Some(BfString::Char('A'))
+        );
+        assert_eq!(
+            numeric_glyph_name_to_unicode("C2d", 0x2d),
+            Some(BfString::Char('-'))
+        );
+        assert_eq!(
+            numeric_glyph_name_to_unicode("CCA", 0xCA),
+            Some(BfString::Char('Ê'))
+        );
+        // Decimal and the other prefixes poppler and pdf.js recognize.
+        assert_eq!(
+            numeric_glyph_name_to_unicode("C65", 65),
+            Some(BfString::Char('A'))
+        );
+        assert_eq!(
+            numeric_glyph_name_to_unicode("G41", 0x41),
+            Some(BfString::Char('A'))
+        );
+        assert_eq!(
+            numeric_glyph_name_to_unicode("g0041", 0x41),
+            Some(BfString::Char('A'))
+        );
+    }
+
+    #[test]
+    fn numeric_glyph_name_is_not_trusted_when_it_spells_another_code() {
+        assert_eq!(numeric_glyph_name_to_unicode("C42", 0x41), None);
+        assert_eq!(numeric_glyph_name_to_unicode("Cxyz", 0x41), None);
+        assert_eq!(numeric_glyph_name_to_unicode("C", 0x41), None);
+        assert_eq!(numeric_glyph_name_to_unicode("A41", 0x41), None);
+    }
+
+    #[test]
+    fn numeric_glyph_name_skips_control_codes() {
+        assert_eq!(numeric_glyph_name_to_unicode("C0a", 0x0a), None);
+        assert_eq!(numeric_glyph_name_to_unicode("C85", 0x85), None);
+    }
 }

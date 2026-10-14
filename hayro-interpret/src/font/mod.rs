@@ -19,7 +19,7 @@ use hayro_syntax::object::dict::keys::*;
 use hayro_syntax::object::{Dict, Stream};
 use hayro_syntax::page::Resources;
 use hayro_syntax::xref::XRef;
-use kurbo::{Affine, BezPath, Vec2};
+use kurbo::{Affine, BezPath, Rect, Vec2};
 use outline::OutlineFont;
 use skrifa::GlyphId;
 use std::borrow::Cow;
@@ -94,6 +94,8 @@ impl Glyph<'_> {
     ///
     /// **For Type3 Fonts:**
     /// 1. `ToUnicode` cmap
+    /// 2. Glyph name → Unicode (via Adobe Glyph List)
+    /// 3. Glyph names that spell their own character code (e.g., "C41", "G41")
     ///
     /// Returns `None` if the Unicode value could not be determined.
     ///
@@ -212,9 +214,29 @@ impl<'a> Type3Glyph<'a> {
 
     /// Returns the Unicode code point for this glyph, if available.
     ///
-    /// Note: Type3 fonts can only provide Unicode via `ToUnicode` cmap.
+    /// See [`Glyph::as_unicode`] for details on the fallback chain used.
     pub fn as_unicode(&self) -> Option<BfString> {
         self.font.char_code_to_unicode(self.char_code)
+    }
+
+    /// Get the advance width for this glyph, in the same units as
+    /// [`OutlineGlyph::advance_width`]: the `/Widths` entry mapped through the
+    /// font's `/FontMatrix`, assuming an upem value of 1000.
+    pub fn advance_width(&self) -> Option<f32> {
+        u8::try_from(self.char_code)
+            .ok()
+            .map(|code| self.font.glyph_width(code))
+    }
+
+    /// The font's `/FontMatrix`, mapping glyph space to text space.
+    pub fn font_matrix(&self) -> Affine {
+        self.font.matrix()
+    }
+
+    /// The font's `/FontBBox`, in glyph space. All zeros when the font makes
+    /// no claim about its glyphs' extent.
+    pub fn font_bbox(&self) -> Rect {
+        self.font.bbox()
     }
 }
 
@@ -628,6 +650,16 @@ impl Default for FallbackFontQuery {
 /// split on underscores into components (ligatures like `f_i`), each mapped
 /// through the AGL or its `uniXXXX`/`uXXXX[XX]` forms.
 pub(crate) fn glyph_name_to_unicode(name: &str) -> Option<BfString> {
+    let unicode = agl_glyph_name_to_unicode(name);
+    if unicode.is_none() {
+        warn!("failed to map glyph name {} to unicode", name);
+    }
+    unicode
+}
+
+/// [`glyph_name_to_unicode`] without the warning, for callers that still have
+/// a fallback of their own and warn only once that fails too.
+pub(crate) fn agl_glyph_name_to_unicode(name: &str) -> Option<BfString> {
     if let Some(unicode_str) = glyph_names::get(name) {
         return bf_string_from_str(unicode_str);
     }
@@ -639,8 +671,6 @@ pub(crate) fn glyph_name_to_unicode(name: &str) -> Option<BfString> {
     let mut out = String::new();
     for component in base.split('_') {
         if !push_component(component, &mut out) {
-            warn!("failed to map glyph name {} to unicode", name);
-
             return None;
         }
     }
